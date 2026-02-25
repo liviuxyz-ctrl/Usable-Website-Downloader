@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "html-unembed-tool"
+version = "0.1.0"
+description = "Stream-extract base64 data: URIs from large HTML dumps into a folder and rewrite links."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name="Your Name"}]
+dependencies = []
+
+[project.scripts]
+html-unembed = "html_unembed_tool.__main__:main"
