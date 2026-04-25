@@ -12,12 +12,16 @@ venv/
 
 # Outputs
 out/
+projects/
+Travel_raw.html
+README_to_comp.md
 *.zip
-assets/
-*.log
+*.html
+!tests/fixtures/*.html
 
-# OS / editor
-.DS_Store
-Thumbs.db
+# Editors
+.codex
 .idea/
 .vscode/
+.DS_Store
+Thumbs.db
