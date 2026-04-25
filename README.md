@@ -1,48 +1,80 @@
-# HTML Unembed Tool (Base64 Data-URI Extractor)
+# HTML Unembed Tool (Base64 Data-URI Extractor + Optional External Asset Downloader)
 
-Extracts embedded `data:*;base64,...` assets from a large HTML dump (and any inline CSS/JS inside it), writes them into a folder, and rewrites the HTML to reference the extracted files.
+Turns a giant exported HTML dump (often 100MB+) into a usable folder:
+- Extracts embedded `data:*;base64,...` assets into files
+- Rewrites the HTML so links point to those files
+- **Optional:** downloads external `http(s)` assets referenced by `src=`, `href=`, or `url(...)` into local files and rewrites links (offline-friendly)
+- Extracts inline `<style>` blocks into real CSS files by default
 
-Designed for **very large HTML files** (e.g., 120MB+) without loading the whole file into memory.
+This is designed to work **streaming** (no “load the whole HTML into RAM”).
 
-## What it does
+## What this repo is for
 
-- Finds **base64 `data:` URIs** (e.g. `data:image/png;base64,...`, fonts, etc.)
-- Decodes them into real files (e.g. `assets/sha256.png`)
-- Rewrites the HTML to use relative links (e.g. `assets/sha256.png`)
-- Works in a **streaming** way: safe for huge inputs
-- Optional: produces an output `.zip`
+This repo contains the Python CLI app that turns one giant HTML export into a
+more normal project folder:
 
-## What it does NOT do
+- `index.html`
+- `assets/` for extracted base64 images, fonts, SVGs, JSON blobs, etc.
+- `styles/` for extracted inline CSS
+- `externals/` for downloaded external scripts, stylesheets, fonts, and images when `--fetch-externals` is used
 
-- It does **not** download external scripts/libs (e.g. jQuery CDN, Google Maps, Hotjar, etc.)
-- If the dump references external services, you may see browser console errors:
-  - `jQuery is not defined` → the original page expected jQuery but it’s not embedded
-  - `401` / `NoApiKeys` → external API requires auth / keys
-  - `file:// origin null` errors → open via a local web server instead of `file://`
+The source code to track in Git is the app itself:
 
-## Quickstart
+- `html_unembed_tool/`
+- `README.md`
+- `pyproject.toml`
+- `requirements.txt`
+- `LICENSE`
 
-### 1) Install (stdlib-only)
-This tool uses only the Python standard library.
+Generated folders and large inputs such as `out/`, `projects/*/out/`, `*.zip`,
+and raw 50MB+ HTML dumps should normally stay out of Git unless you explicitly
+want to version those artifacts.
+
+## jQuery / JavaScript support
+
+The tool supports jQuery in the static-asset sense:
+
+- If jQuery is embedded as a base64 `data:` URI, it is extracted into `assets/`.
+- If jQuery is referenced by a static `<script src="...">` URL, `--fetch-externals` can download it into `externals/` and rewrite the script tag.
+- If inline JavaScript contains base64 `data:` URIs, those data URIs can be extracted and rewritten.
+
+The tool does **not** convert jQuery code into a modern app repo by itself. It
+does not split inline scripts into modules, infer components, rewrite jQuery to
+React/Vue/etc., or fix runtime API calls. It preserves and relocates static
+files so the exported page becomes easier to inspect, serve, and refactor.
+
+## Install
+
+No dependencies (stdlib-only). Python 3.10+ recommended.
+
+From a checkout:
 
 ```bash
-python3 -V
+python3 -m pip install -e .
 ```
 
-### 2) Run
+## Usage
+
+### 1) Extract embedded base64 assets
 ```bash
-python3 -m html_unembed_tool --input input.html --out-dir out --assets-dir assets --zip
+python3 -m html_unembed_tool --input input.html --out-dir out --assets-dir assets
 ```
 
-Outputs:
-- `out/index.html`
-- `out/assets/` (or your chosen assets dir)
-- `out.zip` (if `--zip` is set)
+### 2) Also download external assets (JS/CSS/images/fonts) into local files
+If your HTML contains relative URLs, provide a base URL to resolve them.
 
-### 3) Open it correctly (IMPORTANT)
-Do **not** open the output via `file://...` if you want fewer JS issues.
+```bash
+python3 -m html_unembed_tool \
+  --input input.html \
+  --out-dir out \
+  --assets-dir assets \
+  --fetch-externals \
+  --base-url https://example.com/ \
+  --externals-dir externals
+```
 
-Run a local server:
+### 3) Open the output correctly
+Avoid opening via `file://` (it breaks cookies/origin and some scripts).
 
 ```bash
 cd out
@@ -50,44 +82,60 @@ python3 -m http.server 8000
 ```
 
 Open:
-- `http://localhost:8000/index.html`
+- http://localhost:8000/index.html
 
-## CLI options
+## CLI Options
 
-Typical usage:
+- `--input` (required): input HTML file
+- `--out-dir` (required): output directory
+- `--out-html`: output HTML filename (default: `index.html`)
+- `--assets-dir`: extracted embedded assets folder (default: `assets`)
+- `--fetch-externals`: download external `http(s)` assets and rewrite links
+- `--base-url`: used to resolve relative URLs (recommended if you see relative `src`/`href`)
+- `--externals-dir`: folder for downloaded externals (default: `externals`)
+- `--timeout-s`: per-request timeout (default: 20)
+- `--max-download-mb`: max size per external asset (default: 50)
+- `--zip`: also zip the `out-dir` into `out-dir.zip`
+
+## Development
+
+Run the test suite with the Python standard library:
 
 ```bash
-python3 -m html_unembed_tool \
-  --input input.html \
-  --out-dir out \
-  --out-html index.html \
-  --assets-dir assets \
-  --zip
+python3 -m unittest discover -s tests
 ```
 
-- `--input`     Path to input HTML file
-- `--out-dir`   Output directory
-- `--out-html`  Output HTML filename (default: `index.html`)
-- `--assets-dir` Assets directory name inside `out-dir` (default: `assets`)
-- `--zip`       Also create `out.zip`
+The repository should track the extractor source and docs only. Keep giant raw
+HTML files, generated `out/` folders, generated project folders, and archives
+out of Git.
 
-## Troubleshooting
+## Notes / limitations (important)
 
-### `Unexpected token` / broken JS
-This usually happens if base64 payloads were chopped (common when base64 spans multiple lines).  
-Use the fixed extractor version included in this repo (it allows newlines inside base64 and strips whitespace before decode).
+- This **cannot** magically fix runtime API calls (e.g. `401` from some backend). It only makes static assets local.
+- Some third-party assets may be protected by license/terms — only download what you’re allowed to mirror.
+- JS that dynamically loads more scripts may still attempt network calls. This tool only catches static `src/href/url()` references in the HTML (plus `url()` inside downloaded CSS).
 
-### `jQuery is not defined` / Bootstrap errors
-The dump’s scripts expect jQuery, but it isn’t present locally.
+## License
 
-Two options:
-1) Add a local `jquery.min.js` file and include it before Bootstrap.
-2) Use a CDN `<script>` tag (only if you want external dependency).
+MIT (see LICENSE).
 
-### External APIs failing
-Errors like:
-- Google Maps: `NoApiKeys`
-- Hotjar: `_hjSettings is not defined`
-- Vendor endpoints: `401`
 
-These are expected unless you have keys/tokens and are running on the right domain.
+## Inline <style> extraction (default: ON)
+
+The tool will extract every inline `<style> ... </style>` block into separate CSS files under:
+
+- `out/styles/inline-style-001.css`, `out/styles/inline-style-002.css`, ...
+
+and it replaces the original `<style>` blocks with:
+
+- `<link rel="stylesheet" href="styles/inline-style-001.css">`
+
+Because these CSS files live in a subfolder, the tool automatically rewrites local `url(...)` references
+that point to files that already exist under `out/` (like `assets/...`) to correct relative paths
+(e.g. `../assets/...`).
+
+Disable it with:
+
+```bash
+python3 -m html_unembed_tool ... --no-extract-style-tags
+```
