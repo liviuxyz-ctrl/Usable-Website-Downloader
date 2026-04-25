@@ -6,6 +6,7 @@ from pathlib import Path
 from html_unembed_tool.extract_embedded_assets import (
     extract_data_uris_stream,
     extract_style_tags_to_files,
+    _url_to_local_path,
 )
 
 
@@ -54,6 +55,13 @@ class ExtractEmbeddedAssetsTests(unittest.TestCase):
             self.assertIn('href="styles/inline-style-001.css"', rewritten)
             self.assertIn('media="screen"', rewritten)
             self.assertNotIn("<style", rewritten)
+
+    def test_skips_absurd_css_url_paths(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_dir = Path(tmp_dir)
+            raw = "assets/file.woff" + ("A" * 5000)
+
+            self.assertIsNone(_url_to_local_path(raw, out_dir))
 
 
 if __name__ == "__main__":
