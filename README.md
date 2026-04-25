@@ -84,6 +84,15 @@ python3 -m http.server 8000
 Open:
 - http://localhost:8000/index.html
 
+Or let the tool start the server after extraction:
+
+```bash
+python3 -m html_unembed_tool \
+  --input input.html \
+  --out-dir out \
+  --serve-after
+```
+
 ## CLI Options
 
 - `--input` (required): input HTML file
@@ -96,6 +105,9 @@ Open:
 - `--timeout-s`: per-request timeout (default: 20)
 - `--max-download-mb`: max size per external asset (default: 50)
 - `--zip`: also zip the `out-dir` into `out-dir.zip`
+- `--serve-after`: start a local static web server for `out-dir` after extraction finishes
+- `--serve-host`: host for `--serve-after` (default: `127.0.0.1`)
+- `--serve-port`: port for `--serve-after` (default: `8000`; use `0` for any free port)
 
 ## Development
 

@@ -34,10 +34,13 @@ from __future__ import annotations
 
 import argparse
 import binascii
+import functools
 import hashlib
+import http.server
 import mimetypes
 import os
 import shutil
+import socketserver
 import sys
 import time
 import uuid
@@ -507,6 +510,26 @@ def _zip_dir(src_dir: Path, zip_path: Path) -> None:
             z.write(p, arcname)
 
 
+def serve_directory(out_dir: Path, *, host: str = "127.0.0.1", port: int = 8000) -> None:
+    """Serve out_dir until interrupted."""
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(out_dir))
+
+    class ReusableThreadingTCPServer(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+
+    with ReusableThreadingTCPServer((host, port), handler) as httpd:
+        actual_host, actual_port = httpd.server_address[:2]
+        print(
+            f"Serving {out_dir} at http://{actual_host}:{actual_port}/index.html",
+            file=sys.stderr,
+        )
+        print("Press Ctrl+C to stop the server.", file=sys.stderr)
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\nServer stopped.", file=sys.stderr)
+
+
 
 # -----------------------------
 # External asset fetching (optional)
@@ -772,6 +795,10 @@ def _url_to_local_path(raw: str, out_dir: Path) -> Optional[Path]:
     s = (raw or "").strip()
     if not s:
         return None
+    # Malformed CSS from some exporters can leave large base64 fragments looking
+    # like local URLs. Do not pass impossible paths to the filesystem.
+    if len(s) > 2048 or "\x00" in s:
+        return None
     low = s.lower()
     if low.startswith(("http://", "https://", "//", "data:", "javascript:", "mailto:", "tel:")):
         return None
@@ -783,12 +810,21 @@ def _url_to_local_path(raw: str, out_dir: Path) -> Optional[Path]:
     base = base.lstrip("/")  # treat /a/b as out_dir/a/b
     if not base:
         return None
+    if len(base) > 1024:
+        return None
 
     norm = os.path.normpath(base).replace("\\", "/")
     if norm.startswith(".."):
         return None
 
     return out_dir / norm
+
+
+def _safe_exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError:
+        return False
 
 
 def _rewrite_local_urls_in_css(css_path: Path, *, out_dir: Path, verbose: bool = False) -> None:
@@ -802,7 +838,7 @@ def _rewrite_local_urls_in_css(css_path: Path, *, out_dir: Path, verbose: bool =
     repl: Dict[bytes, bytes] = {}
     for raw_b, raw_s in raw_map.items():
         p = _url_to_local_path(raw_s, out_dir)
-        if not p or not p.exists():
+        if not p or not _safe_exists(p):
             continue
 
         # Preserve query/fragment suffix
@@ -1020,7 +1056,7 @@ def fetch_and_rewrite_externals(
     for raw_b, raw_s in raw_map.items():
         # Skip URLs that already point to a local file we generated (assets/styles/externals...)
         lp = _url_to_local_path(raw_s, out_dir)
-        if lp and lp.exists():
+        if lp and _safe_exists(lp):
             continue
 
         abs_url = _normalize_url(raw_s, base_url)
@@ -1062,7 +1098,7 @@ def fetch_and_rewrite_externals(
 
         for raw_b, raw_s in css_raw_map.items():
             lp = _url_to_local_path(raw_s, out_dir)
-            if lp and lp.exists():
+            if lp and _safe_exists(lp):
                 continue
 
             abs_dep = _normalize_url(raw_s, css_url)
@@ -1101,7 +1137,7 @@ def fetch_and_rewrite_externals(
             css_repl: Dict[bytes, bytes] = {}
             for raw_b, raw_s in css_raw_map.items():
                 lp = _url_to_local_path(raw_s, out_dir)
-                if lp and lp.exists():
+                if lp and _safe_exists(lp):
                     continue
                 abs_dep = _normalize_url(raw_s, base_url)
                 if not abs_dep:
@@ -1174,6 +1210,23 @@ def main() -> int:
         "--zip",
         action="store_true",
         help="Also produce out-dir.zip next to out-dir",
+    )
+    ap.add_argument(
+        "--serve-after",
+        "--after-done-start-server",
+        action="store_true",
+        help="Start a local static web server for out-dir after extraction finishes",
+    )
+    ap.add_argument(
+        "--serve-host",
+        default="127.0.0.1",
+        help="Host for --serve-after (default: 127.0.0.1)",
+    )
+    ap.add_argument(
+        "--serve-port",
+        type=int,
+        default=8000,
+        help="Port for --serve-after (default: 8000; use 0 for any free port)",
     )
 
     ap.add_argument(
@@ -1261,6 +1314,9 @@ def main() -> int:
         zip_path = out_dir.with_suffix(out_dir.suffix + ".zip") if out_dir.suffix else Path(str(out_dir) + ".zip")
         _zip_dir(out_dir, zip_path)
         print(f"Zip written: {zip_path}", file=sys.stderr)
+
+    if args.serve_after:
+        serve_directory(out_dir, host=str(args.serve_host), port=int(args.serve_port))
 
     return 0
 
