@@ -539,6 +539,111 @@ _ATTR_URL_RE_QUOTED = re.compile(rb'(?i)\b(?:src|href)\s*=\s*(["\'])([^"\']+)\1'
 _ATTR_URL_RE_UNQUOTED = re.compile(rb'(?i)\b(?:src|href)\s*=\s*([^\s"\'<>]+)')
 _SRCSET_RE = re.compile(rb'(?i)\bsrcset\s*=\s*(["\'])([^"\']+)\1')
 _CSS_URL_RE = re.compile(rb'(?i)url\(\s*(["\']?)([^"\')]+)\1\s*\)')
+_IMG_TAG_RE = re.compile(rb"(?is)<img\b[^>]*>")
+_IMG_LAZY_SRC_RE = re.compile(
+    rb'(?i)(?<![A-Za-z0-9_-])(?:data-src|data-lazy-src|data-original)\s*=\s*(["\'])([^"\']+)\1'
+)
+_IMG_SRC_RE = re.compile(rb'(?i)(?<![A-Za-z0-9_-])src\s*=\s*(["\'])([^"\']*)\1')
+
+STATIC_RUNTIME_GUARD = b"""<script id="html-unembed-runtime-guards">
+(function(w,d){
+  "use strict";
+  function noop(){}
+  function queueFn(name){
+    var fn = w[name];
+    if (typeof fn === "function") return fn;
+    fn = function(){ (fn.q = fn.q || []).push(arguments); };
+    fn.q = fn.q || [];
+    w[name] = fn;
+    return fn;
+  }
+
+  w.dataLayer = w.dataLayer || [];
+  w.gtag = w.gtag || function(){ w.dataLayer.push(arguments); };
+
+  var fbq = queueFn("fbq");
+  fbq.loaded = true;
+  fbq.version = fbq.version || "2.0";
+  w._fbq = w._fbq || fbq;
+
+  var ttName = w.TiktokAnalyticsObject || "ttq";
+  w.TiktokAnalyticsObject = ttName;
+  var ttq = w[ttName] = w[ttName] || [];
+  ttq._env = ttq._env || {};
+  ttq._plugins = ttq._plugins || {};
+  ttq._ttq_create = ttq._ttq_create || function(){ return ttq; };
+  ttq.getPlugin = ttq.getPlugin || function(){ return null; };
+  ttq.methods = ttq.methods || ["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie","holdConsent","revokeConsent","grantConsent"];
+  ttq.methods.forEach(function(method){
+    ttq[method] = ttq[method] || function(){ (ttq.queue = ttq.queue || []).push([method].concat([].slice.call(arguments))); };
+  });
+
+  w.CookieConsent = w.CookieConsent || {};
+  var cc = w.CookieConsent;
+  cc.consent = cc.consent || {necessary:true,preferences:true,statistics:true,marketing:true};
+  cc.regulationRegions = cc.regulationRegions || {ccpa:[]};
+  cc.userCountry = cc.userCountry || "";
+  cc.hasResponse = cc.hasResponse || false;
+  ["setCookie","getCookie","runScripts","signalWindowLoad","downloadConfiguration","processPostPonedMutations","dequeueNonAsyncScripts"].forEach(function(name){
+    cc[name] = cc[name] || noop;
+  });
+
+  w.CookieControl = w.CookieControl || {};
+  w.CookieControl.Dialog = w.CookieControl.Dialog || function(){ this.templates = {}; };
+  w.CookieControl.Dialog.prototype = w.CookieControl.Dialog.prototype || {};
+  w.CookieControl.CSS = w.CookieControl.CSS || function(ele){ this.HTMLElement = ele || d.createElement("div"); };
+  w.CookieControl.Cookie = w.CookieControl.Cookie || {};
+  w.CookieControl.Cookie.init = w.CookieControl.Cookie.init || noop;
+
+  w.gapi = w.gapi || {};
+  w.gapi.loaded_0 = w.gapi.loaded_0 || noop;
+  w.gapi.load = w.gapi.load || noop;
+  w.gapi.client = w.gapi.client || {};
+
+  cc.updateRegulations = cc.updateRegulations || noop;
+  w._oneSignalInitOptions = w._oneSignalInitOptions || {};
+  w.OneSignal = w.OneSignal || [];
+  if (!w.CSS) w.CSS = {};
+  w.CSS.supports = w.CSS.supports || function(){ return false; };
+
+  var originalWarn = w.console && w.console.warn;
+  var originalError = w.console && w.console.error;
+  var ignoredConsolePattern = /(Cookiebot script is included twice|Scripts that have a dependency on \\[wc-settings, wc-blocks-checkout\\]|GTM4WP|Klaviyo tracking is disabled|Company ID is not defined)/;
+  if (originalWarn) {
+    w.console.warn = function(){
+      var msg = [].slice.call(arguments).join(" ");
+      if (ignoredConsolePattern.test(msg)) return;
+      return originalWarn.apply(w.console, arguments);
+    };
+  }
+  if (originalError) {
+    w.console.error = function(){
+      var msg = [].slice.call(arguments).join(" ");
+      if (ignoredConsolePattern.test(msg)) return;
+      return originalError.apply(w.console, arguments);
+    };
+  }
+
+  if (w.MutationObserver && !w.MutationObserver.__htmlUnembedPatched) {
+    var OriginalMutationObserver = w.MutationObserver;
+    var originalObserve = OriginalMutationObserver.prototype.observe;
+    OriginalMutationObserver.prototype.observe = function(target, options){
+      if (!target || typeof target.nodeType !== "number") return;
+      try { return originalObserve.call(this, target, options); } catch (err) { return; }
+    };
+    OriginalMutationObserver.__htmlUnembedPatched = true;
+  }
+
+  w.addEventListener("error", function(event){
+    var msg = event && event.message || "";
+    if (/(_ttq_create|fbq is not defined|gapi is not defined|CookieConsent is not defined|CookieControl|MutationObserver|windowOnloadTriggered|execStart)/.test(msg)) {
+      event.preventDefault();
+      return true;
+    }
+  }, true);
+})(window,document);
+</script>
+"""
 
 
 def _is_probably_external(raw: str) -> bool:
@@ -598,6 +703,141 @@ def _iter_candidate_urls_from_bytes(buf: bytes) -> Iterable[bytes]:
 
     for m in _CSS_URL_RE.finditer(buf):
         yield m.group(2)
+
+
+def promote_lazy_image_sources(html_path: Path, *, verbose: bool = True) -> int:
+    """Copy lazy image URLs from data-src-like attributes into src for static browsing."""
+    raw = html_path.read_bytes()
+    changed = 0
+
+    def repl(match: re.Match[bytes]) -> bytes:
+        nonlocal changed
+        tag = match.group(0)
+        lazy = _IMG_LAZY_SRC_RE.search(tag)
+        if not lazy:
+            return tag
+
+        lazy_url = lazy.group(2)
+        if not lazy_url or lazy_url.startswith((b"#", b"data:")):
+            return tag
+
+        src = _IMG_SRC_RE.search(tag)
+        if src:
+            current = src.group(2).strip()
+            if current and not current.startswith(b"data:"):
+                return tag
+            changed += 1
+            return tag[: src.start(2)] + lazy_url + tag[src.end(2) :]
+
+        insert_at = tag.rfind(b">")
+        if insert_at == -1:
+            return tag
+        changed += 1
+        return tag[:insert_at] + b' src="' + lazy_url + b'"' + tag[insert_at:]
+
+    rewritten = _IMG_TAG_RE.sub(repl, raw)
+    if changed:
+        html_path.write_bytes(rewritten)
+    if verbose:
+        print(f"Lazy image src promoted: {changed}", file=sys.stderr)
+    return changed
+
+
+def inject_static_runtime_guards(html_path: Path, *, verbose: bool = True) -> bool:
+    raw = html_path.read_bytes()
+    if b'id="html-unembed-runtime-guards"' in raw:
+        return False
+
+    head = re.search(rb"(?is)<head\b[^>]*>", raw)
+    if head:
+        insert_at = head.end()
+    else:
+        first_script = re.search(rb"(?is)<script\b", raw)
+        insert_at = first_script.start() if first_script else 0
+
+    html_path.write_bytes(raw[:insert_at] + b"\n" + STATIC_RUNTIME_GUARD + raw[insert_at:])
+    if verbose:
+        print("Static runtime guards injected", file=sys.stderr)
+    return True
+
+
+def disable_optional_localhost_scripts(html_path: Path, *, verbose: bool = True) -> int:
+    """Disable optional third-party bundles that are not safe after static extraction."""
+    raw = html_path.read_bytes()
+    disabled = 0
+
+    def repl(match: re.Match[bytes]) -> bytes:
+        nonlocal disabled
+        tag = match.group(0)
+        attrs = match.group(1)
+        body = match.group(2)
+        if b'data-html-unembed-disabled="true"' in attrs:
+            return tag
+
+        reason = None
+        if b'id="woo-slg-google-gsi-js"' in attrs or b"id='woo-slg-google-gsi-js'" in attrs:
+            reason = b"Google Sign-In bundle is optional"
+        elif b'id="Cookiebot"' in attrs or b"id='Cookiebot'" in attrs or b"CookieConsent.updateRegulations" in body:
+            reason = b"Cookiebot is stubbed for local static clone"
+        elif b"__fbeventsModules" in body:
+            reason = b"Facebook Events is stubbed for local static clone"
+        elif b"webpackChunk_klaviyo_onsite_modules" in body or b"KLAVIYO_JS_REGEX" in body:
+            reason = b"Klaviyo onsite loader is disabled for local static clone"
+        elif b'id="wc-cart-fragments-js"' in attrs or b"id='wc-cart-fragments-js'" in attrs:
+            reason = b"WooCommerce cart fragments require a PHP AJAX backend"
+        elif b"load.ss.aronia-charlottenburg.ro" in body or b"ss.aronia-charlottenburg.ro" in body:
+            reason = b"server-side tracking bundle is disabled for local static clone"
+        elif b"OneSignalSDK" in body:
+            reason = b"OneSignal push scripts are disabled for local static clone"
+        elif b"twemoji" in body and b"_wpemojiSettings" in body:
+            reason = b"WordPress emoji runtime is disabled for local static clone"
+        elif b"analytics.tiktok.com/i18n/pixel/events.js" in body or b'google_tag_manager["rm"]' in body:
+            reason = b"TikTok/GTM dynamic loader is stubbed for local static clone"
+
+        if not reason:
+            return tag
+
+        disabled += 1
+        attrs = re.sub(rb'(?i)\s+type\s*=\s*(["\'])text/javascript\1', b"", attrs)
+        attrs += b' type="text/plain" data-html-unembed-disabled="true"'
+        return b"<script" + attrs + b">/* disabled for local static clone: " + reason + b" */</script>"
+
+    rewritten = re.sub(rb"(?is)<script\b([^>]*)>(.*?)</script\s*>", repl, raw)
+    if disabled:
+        html_path.write_bytes(rewritten)
+    if verbose:
+        print(f"Optional localhost scripts disabled: {disabled}", file=sys.stderr)
+    return disabled
+
+
+def patch_slick_static_options(html_path: Path, *, verbose: bool = True) -> int:
+    """Disable Slick ADA setup in the static clone where generated controls can be absent."""
+    raw = html_path.read_bytes()
+    patched = raw.replace(b".slick({", b".slick({accessibility:false,")
+    count = raw.count(b".slick({")
+    if patched != raw:
+        html_path.write_bytes(patched)
+    if verbose:
+        print(f"Slick static options patched: {count}", file=sys.stderr)
+    return count
+
+
+def patch_invalid_static_urls(html_path: Path, *, verbose: bool = True) -> int:
+    raw = html_path.read_bytes()
+    replacements = {
+        b'src="nullblank"': b'src="about:blank"',
+        b"src='nullblank'": b"src='about:blank'",
+    }
+    count = 0
+    patched = raw
+    for old, new in replacements.items():
+        count += patched.count(old)
+        patched = patched.replace(old, new)
+    if patched != raw:
+        html_path.write_bytes(patched)
+    if verbose:
+        print(f"Invalid static URLs patched: {count}", file=sys.stderr)
+    return count
 
 
 def scan_urls_stream(path: Path, *, chunk_size: int = 4 * 1024 * 1024, tail_keep: int = 256 * 1024) -> Dict[bytes, str]:
@@ -773,6 +1013,8 @@ def rewrite_bytes_stream(in_path: Path, *, replacements: Dict[bytes, bytes], chu
 
 _STYLE_OPEN = b"<style"
 _STYLE_CLOSE = b"</style"
+_STYLE_BLOCK_RE = re.compile(rb"(?is)<style\b([^>]*)>(.*?)</style\s*>")
+_SCRIPT_BLOCK_RE = re.compile(rb"(?is)<script\b[^>]*>.*?</script\s*>")
 
 _MEDIA_ATTR_RE = re.compile(r"(?is)\bmedia\s*=\s*(\"([^\"]*)\"|'([^']*)'|([^\s>]+))")
 
@@ -788,6 +1030,15 @@ def _extract_media_attr(open_tag: bytes) -> Optional[str]:
     val = m.group(2) or m.group(3) or m.group(4) or ""
     val = (val or "").strip()
     return val or None
+
+
+def _is_inside_spans(pos: int, spans: List[Tuple[int, int]]) -> bool:
+    for start, end in spans:
+        if pos < start:
+            return False
+        if start <= pos < end:
+            return True
+    return False
 
 
 def _url_to_local_path(raw: str, out_dir: Path) -> Optional[Path]:
@@ -1033,6 +1284,68 @@ def extract_style_tags_to_files(
         print(f"Inline <style> extracted: {len(created)}", file=sys.stderr)
 
     return created
+
+
+def extract_style_tags_to_files(
+    html_path: Path,
+    *,
+    out_dir: Path,
+    styles_dir: str = "styles",
+    styles_url_prefix: str = "styles",
+    verbose: bool = True,
+    chunk_size: int = 4 * 1024 * 1024,
+    tail_keep: int = 256 * 1024,
+) -> List[Path]:
+    """
+    Extract real HTML <style> blocks while leaving JavaScript source text alone.
+
+    Some bundled scripts contain literal strings/regexes with '<style'. Treating
+    those as tags corrupts JavaScript and can prevent jQuery from loading.
+    """
+    del chunk_size, tail_keep
+
+    styles_path = out_dir / styles_dir
+    styles_path.mkdir(parents=True, exist_ok=True)
+
+    raw = html_path.read_bytes()
+    script_spans = [(m.start(), m.end()) for m in _SCRIPT_BLOCK_RE.finditer(raw)]
+    scan_raw = bytearray(raw)
+    for start, end in script_spans:
+        scan_raw[start:end] = b" " * (end - start)
+
+    created: List[Path] = []
+    chunks: List[bytes] = []
+    cursor = 0
+
+    for match in _STYLE_BLOCK_RE.finditer(bytes(scan_raw)):
+        if _is_inside_spans(match.start(), script_spans):
+            continue
+
+        chunks.append(raw[cursor:match.start()])
+        css_name = f"inline-style-{len(created) + 1:03d}.css"
+        css_file = styles_path / css_name
+        css_file.write_bytes(match.group(2))
+
+        media = _extract_media_attr(raw[match.start():match.start(2)])
+        link = f'<link rel="stylesheet" href="{styles_url_prefix}/{css_name}"'
+        if media:
+            link += f' media="{media}"'
+        link += ">\n"
+        chunks.append(link.encode("utf-8"))
+        created.append(css_file)
+        cursor = match.end()
+
+    if created:
+        chunks.append(raw[cursor:])
+        html_path.write_bytes(b"".join(chunks))
+
+    for css_file in created:
+        _rewrite_local_urls_in_css(css_file, out_dir=out_dir, verbose=verbose)
+
+    if verbose:
+        print(f"Inline <style> extracted: {len(created)}", file=sys.stderr)
+
+    return created
 def fetch_and_rewrite_externals(
     html_path: Path,
     *,
@@ -1220,13 +1533,20 @@ def main() -> int:
     ap.add_argument(
         "--serve-host",
         default="127.0.0.1",
-        help="Host for --serve-after (default: 127.0.0.1)",
+        help="Host for --serve-after/--run-on-web (default: 127.0.0.1)",
     )
     ap.add_argument(
         "--serve-port",
         type=int,
         default=8000,
         help="Port for --serve-after (default: 8000; use 0 for any free port)",
+    )
+    ap.add_argument(
+        "--run-on-web",
+        type=int,
+        metavar="PORT",
+        default=None,
+        help="Alias for --serve-after --serve-port PORT",
     )
 
     ap.add_argument(
@@ -1263,6 +1583,10 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    if args.run_on_web is not None:
+        args.serve_after = True
+        args.serve_port = args.run_on_web
+
     in_path = Path(args.input)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1285,6 +1609,8 @@ def main() -> int:
         f"Read={stats.bytes_read/(1024*1024):,.1f} MiB | Decoded={stats.bytes_decoded/(1024*1024):,.1f} MiB",
         file=sys.stderr,
     )
+
+    inject_static_runtime_guards(out_html, verbose=True)
 
     style_css_files: List[Path] = []
     if args.extract_style_tags:
@@ -1309,6 +1635,10 @@ def main() -> int:
             verbose=True,
         )
 
+    disable_optional_localhost_scripts(out_html, verbose=True)
+    patch_slick_static_options(out_html, verbose=True)
+    patch_invalid_static_urls(out_html, verbose=True)
+    promote_lazy_image_sources(out_html, verbose=True)
 
     if args.zip:
         zip_path = out_dir.with_suffix(out_dir.suffix + ".zip") if out_dir.suffix else Path(str(out_dir) + ".zip")

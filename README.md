@@ -93,6 +93,15 @@ python3 -m html_unembed_tool \
   --serve-after
 ```
 
+Or choose the server port directly:
+
+```bash
+python3 -m html_unembed_tool \
+  --input input.html \
+  --out-dir out \
+  --run-on-web 8000
+```
+
 ## CLI Options
 
 - `--input` (required): input HTML file
@@ -106,8 +115,9 @@ python3 -m html_unembed_tool \
 - `--max-download-mb`: max size per external asset (default: 50)
 - `--zip`: also zip the `out-dir` into `out-dir.zip`
 - `--serve-after`: start a local static web server for `out-dir` after extraction finishes
-- `--serve-host`: host for `--serve-after` (default: `127.0.0.1`)
+- `--serve-host`: host for `--serve-after` / `--run-on-web` (default: `127.0.0.1`)
 - `--serve-port`: port for `--serve-after` (default: `8000`; use `0` for any free port)
+- `--run-on-web PORT`: alias for `--serve-after --serve-port PORT`
 
 ## Development
 
